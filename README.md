@@ -4,7 +4,7 @@ A real-time **Computer Vision and Machine Learning** project for detecting drive
 
 ## 📌 Project Overview
 
-The system will use facial landmarks to analyze the driver's eyes, mouth, and head movements. Features such as **Eye Aspect Ratio (EAR), Mouth Aspect Ratio (MAR), and head pose** will be used to identify whether the driver is **Alert, Drowsy, or Distracted**.
+The system will use facial landmarks to analyze the driver's eyes, mouth, and head movements. Features such as **Eye Aspect Ratio (EAR), Mouth Aspect Ratio (MAR), and head pose** will be used  to identify whether the driver is **Alert, Drowsy, or Distracted**.
 
 An audio alert will be triggered when dangerous behavior is detected.
 
