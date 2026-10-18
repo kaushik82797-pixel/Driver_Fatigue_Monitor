@@ -26,6 +26,7 @@ from backend.main import (
     StartMonitorRequest,
 )
 from fastapi import HTTPException
+from fastapi.responses import StreamingResponse
 from unittest.mock import Mock
 import backend.main as backend_main
 
@@ -58,6 +59,9 @@ def test_initial_monitor_status_is_idle():
     assert "evaluation" in payload
     assert payload["evaluation"]["face_detected"] is False
     assert payload["evaluation"]["states"]["primary_status"] == "No Face Detected"
+    with pytest.raises(HTTPException) as exc_info:
+        backend_main.stream_monitor()
+    assert exc_info.value.status_code == 409
 
 
 def test_stop_when_idle_raises_http_400():
@@ -124,6 +128,28 @@ def test_start_and_stop_with_mocked_camera(monkeypatch, tmp_path):
     assert manager.get_status_payload()["monitor_running"] is False
     cap.release.assert_called_once()
     landmarker.close.assert_called_once()
+    assert manager.get_latest_frame() is None
+
+
+def test_frame_access_returns_copy():
+    manager = backend_main.DriverMonitorManager()
+    source = np.zeros((3, 3, 3), dtype=np.uint8)
+    with manager._lock:
+        manager._is_running = True
+        manager._latest_frame = source
+    result = manager.get_latest_frame()
+    assert result is not source
+    result[0, 0, 0] = 255
+    assert source[0, 0, 0] == 0
+
+
+def test_stream_endpoint_returns_mjpeg_response(monkeypatch):
+    frame = np.zeros((2, 2, 3), dtype=np.uint8)
+    monkeypatch.setattr(monitor_manager, "is_running", lambda: True)
+    monkeypatch.setattr(monitor_manager, "get_latest_frame", lambda: frame.copy())
+    response = backend_main.stream_monitor()
+    assert isinstance(response, StreamingResponse)
+    assert response.media_type == "multipart/x-mixed-replace; boundary=frame"
 
 
 def test_concurrent_start_only_creates_one_worker(monkeypatch, tmp_path):

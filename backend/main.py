@@ -16,6 +16,7 @@ import cv2
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from fastapi.responses import StreamingResponse
 
 # Ensure project root is in sys.path to access the vision module
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -69,6 +70,7 @@ class DriverMonitorManager:
         self._stop_event = threading.Event()
         self._is_running = False
         self._starting = False
+        self._latest_frame: Optional[np.ndarray] = None
 
         # Current session configuration
         self._config: Dict[str, Any] = {
@@ -114,6 +116,7 @@ class DriverMonitorManager:
                 self._stats["error"] = f"Model file not found at {abs_model_path}."
                 return False, self._stats["error"]
             self._stop_event.clear()
+            self._latest_frame = None
             self._starting = True
             self._config = {
                 "camera_index": req.camera_index,
@@ -192,6 +195,7 @@ class DriverMonitorManager:
             self._is_running = False
             self._starting = False
             self._worker_thread = None
+            self._latest_frame = None
 
         return True, "Driver monitoring stopped successfully."
 
@@ -212,6 +216,13 @@ class DriverMonitorManager:
                 "stats": dict(self._stats),
                 "evaluation": dict(self._latest_evaluation)
             }
+
+    def get_latest_frame(self) -> Optional[np.ndarray]:
+        """Returns an independent copy of the latest annotated frame, if available."""
+        with self._lock:
+            if not self._is_running or self._latest_frame is None:
+                return None
+            return self._latest_frame.copy()
 
     def _worker_loop(self, abs_model_path: str):
         """
@@ -298,6 +309,20 @@ class DriverMonitorManager:
                         p_c_l, p_c_r, p_top_c, p_bot_c, p_top_l, p_bot_l, p_top_r, p_bot_r
                     )
 
+                    # Draw a minimal face mesh overlay on the same frame being monitored.
+                    from mediapipe.tasks.python.vision import FaceLandmarksConnections
+                    for connection in FaceLandmarksConnections.FACE_LANDMARKS_TESSELATION:
+                        start_pt = lm[connection.start]
+                        end_pt = lm[connection.end]
+                        cv2.line(
+                            frame,
+                            (int(start_pt.x * w), int(start_pt.y * h)),
+                            (int(end_pt.x * w), int(end_pt.y * h)),
+                            (70, 220, 150),
+                            1,
+                            cv2.LINE_AA,
+                        )
+
                     # Update counters
                     if ear_avg < self._config["ear_threshold"]:
                         eye_closed_frames += 1
@@ -335,6 +360,7 @@ class DriverMonitorManager:
                     self._latest_evaluation = evaluation
                     self._stats["frames_processed"] = frames_counted
                     self._stats["fps"] = current_fps
+                    self._latest_frame = frame.copy()
 
         except Exception as exc:
             with self._lock:
@@ -355,6 +381,7 @@ class DriverMonitorManager:
             with self._lock:
                 self._starting = False
                 self._is_running = False
+                self._latest_frame = None
 
 
 # Instantiate central monitor manager singleton
@@ -416,6 +443,32 @@ def get_monitor_status():
     and latest driver telemetry (EAR, MAR, frame counters, and alert states).
     """
     return monitor_manager.get_status_payload()
+
+
+def _mjpeg_frames():
+    while monitor_manager.is_running():
+        frame = monitor_manager.get_latest_frame()
+        if frame is None:
+            time.sleep(0.05)
+            continue
+        ok, encoded = cv2.imencode(".jpg", frame)
+        if not ok:
+            time.sleep(0.05)
+            continue
+        yield b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + encoded.tobytes() + b"\r\n"
+
+
+@app.get("/api/monitor/stream")
+def stream_monitor():
+    if not monitor_manager.is_running():
+        raise HTTPException(status_code=409, detail="Monitoring is stopped; start monitoring before requesting the camera stream.")
+    if monitor_manager.get_latest_frame() is None:
+        raise HTTPException(status_code=503, detail="Monitoring is active, but no camera frame is available yet.")
+    return StreamingResponse(
+        _mjpeg_frames(),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+        headers={"Cache-Control": "no-cache", "Pragma": "no-cache"},
+    )
 
 
 @app.post("/api/monitor/start")
