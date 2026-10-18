@@ -1,0 +1,28 @@
+# Datasets & Models
+datasets/*
+!datasets/.gitkeep
+models/*
+!models/.gitkeep
+*.h5
+*.pt
+*.pth
+*.onnx
+
+# Python & Virtual Envs
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Node / Frontend
+node_modules/
+dist/
+.vite/
+
+# Environment & System
+.env
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
